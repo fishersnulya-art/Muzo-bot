@@ -1,7 +1,4 @@
-import os
-import requests
-import telebot
-from telebot import types
+types
 
 TOKEN = os.environ.get('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
@@ -68,34 +65,4 @@ def search_music(message):
         print(f"Ошибка поиска: {e}")
         bot.edit_message_text(
             chat_id=message.chat.id,
-            message_id=status_msg.message_id,
-            text="❌ Произошла ошибка при поиске. Попробуйте ещё раз."
-        )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('song_'))
-def handle_music_choice(call):
-    chat_id = call.message.chat.id
-    track_id = call.data.split('_')[1]
-
-    # Проверяем, есть ли сохраненный выбор для этого пользователя
-    if chat_id in user_search_results and track_id in user_search_results[chat_id]:
-        track_data = user_search_results[chat_id][track_id]
-
-        bot.answer_callback_query(call.id, text="Загрузка трека...")
-        bot.send_chat_action(chat_id, 'upload_voice')
-
-        try:
-            # Отправка MP3-файла напрямую в чат
-            bot.send_audio(
-                chat_id=chat_id,
-                audio=track_data['url'],
-                title=track_data['title'],
-                performer=track_data['artist']
-            )
-        except Exception as e:
-            print(f"Ошибка отправки файла: {e}")
-            bot.send_message(chat_id, "❌ Не удалось отправить аудиофайл. Попробуйте выбрать другой вариант.")
-    else:
-        bot.answer_callback_query(call.id, text="Результаты поиска устарели. Введите запрос заново.")
-
-bot.infinity_polling()
+            message_id

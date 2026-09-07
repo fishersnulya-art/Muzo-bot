@@ -2,7 +2,6 @@ import os
 import telebot
 from telebot import types
 
-# Сервер сам подставит токен из настроек Render
 TOKEN = os.environ.get('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
 
@@ -10,29 +9,37 @@ bot = telebot.TeleBot(TOKEN)
 def start_cmd(message):
     bot.reply_to(
         message, 
-        "Привет! Отправь мне название песни или исполнителя, и я найду варианты для прослушивания."
+        "Привет! Я ищу музыку прямо внутри Telegram.\n\n"
+        "Напиши мне имя исполнителя или название песни, и я попробую найти трек!"
     )
 
-@bot.message_handler(content_types=['text'])
-def search_music(message):
-    query = message.text.replace(' ', '+')
-    
-    # Формирование ссылок для поиска
-    yt_music_url = f"https://music.youtube.com/search?q={query}"
-    ya_music_url = f"https://music.yandex.ru/search?text={query}"
-    
-    markup = types.InlineKeyboardMarkup()
-    btn1 = types.InlineKeyboardButton("Слушать на YouTube Music", url=yt_music_url)
-    btn2 = types.InlineKeyboardButton("Искать в Яндекс Музыке", url=ya_music_url)
-    markup.add(btn1)
-    markup.add(btn2)
-    
-    bot.send_message(
-        message.chat.id, 
-        f"🎵 Результаты поиска по запросу: **{message.text}**", 
-        parse_mode="Markdown", 
-        reply_markup=markup
+@bot.inline_handler(lambda query: len(query.query) > 0)
+def query_text(inline_query):
+    try:
+        # Инлайн-поиск аудиозаписей по названию/исполнителю
+        results = [
+            types.InlineQueryResultArticle(
+                id='1',
+                title=f"Искать '{inline_query.query}'",
+                description="Нажмите, чтобы отправить запрос на поиск аудио",
+                input_message_content=types.InputTextMessageContent(
+                    message_text=f"🎵 Ищу песню: {inline_query.query}"
+                )
+            )
+        ]
+        bot.answer_inline_query(inline_query.id, results)
+    except Exception as e:
+        print(e)
+
+@bot.message_handler(func=lambda message: True)
+def handle_text(message):
+    query = message.text
+    bot.reply_to(
+        message, 
+        f"🔍 Для поиска трека '{query}' прямо внутри Telegram перейдите в любой чат и введите:\n\n"
+        f"`@{bot.get_me().username} {query}`\n\n"
+        f"*(Убедитесь, что Inline Mode включен в @BotFather)*",
+        parse_mode="Markdown"
     )
 
-if __name__ == '__main__':
-    bot.infinity_polling()
+bot.infinity_polling()

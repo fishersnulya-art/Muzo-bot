@@ -59,10 +59,12 @@ def search_music_query(message, query, is_top=False):
     status_msg = bot.reply_to(message, status_text, parse_mode="Markdown")
 
     try:
+        # Добавляем обход блокировки по IP для поиска
         ydl_opts = {
             'extract_flat': 'in_playlist',
-            'default_search': 'ytsearch10' if not is_top else 'ytsearch15',
+            'default_search': 'ytsearch15',
             'quiet': True,
+            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -177,6 +179,7 @@ def handle_callbacks(call):
 
             filename = f"song_{chat_id}.mp3"
 
+            # Добавляем обход защиты от ботов для загрузчика
             ydl_opts = {
                 'format': 'bestaudio/best',
                 'outtmpl': filename.replace('.mp3', ''),
@@ -188,6 +191,7 @@ def handle_callbacks(call):
                 }],
                 'quiet': True,
                 'noplaylist': True,
+                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
             }
 
             try:

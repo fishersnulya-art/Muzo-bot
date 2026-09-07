@@ -7,7 +7,13 @@ from telebot import types
 TOKEN = os.environ.get('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN, skip_pending=True)
 
-# Хранилище сессий пользователей для пагинации
+# Публичные и стабильные Piped API инстансы для обхода блокировок YouTube
+PIPED_INSTANCES = [
+    "https://pipedapi.kavin.rocks",
+    "https://pipedapi.drgns.space",
+    "https://pipedapi.adminforge.de"
+]
+
 user_data = {}
 
 def get_main_keyboard():
@@ -21,9 +27,9 @@ def get_main_keyboard():
 def start_cmd(message):
     welcome_text = (
         f"👋 Привет, *{message.from_user.first_name}*!\n\n"
-        "🎵 Я расширенный музыкальный бот. Я ищу и скачиваю **полные версии треков** "
-        "из свободных глобальных каталогов прямо в плеер Telegram.\n\n"
-        "🔍 *Напиши название песни или исполнителя:*"
+        "🎵 Я музыкальный бот с максимальной базой. Ищу любые треки, ремиксы "
+        "и полные версии без ограничений!\n\n"
+        "🔍 *Напиши название песни, исполнителя или ремикса:*"
     )
     bot.send_message(
         message.chat.id, 
@@ -37,88 +43,70 @@ def start_cmd(message):
 def help_cmd(message):
     help_text = (
         "📌 *Как пользоваться ботом:*\n\n"
-        "1. Отправь имя исполнителя или название трека (например: `LOBODA`, `Miyagi` или `Rock`).\n"
-        "2. Выбери нужный трек из интерактивного списка.\n"
+        "1. Отправь любое название, имя артиста или запрос с ремиксом (например: `Каспийский груз ремикс`).\n"
+        "2. Выбери нужный трек из большого списка.\n"
         "3. Переключай страницы кнопками ⬅️ / ➡️.\n"
-        "4. Получай полную песню в стандартном аудиоплеере Telegram!"
+        "4. Получай полную версию в плеере Telegram!"
     )
     bot.send_message(message.chat.id, help_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['top'])
 @bot.message_handler(func=lambda m: m.text == "🔥 Популярные треки")
 def top_music(message):
-    search_music_query(message, "Global Hits", is_top=True)
+    search_music_query(message, "русские хиты ремиксы топ", is_top=True)
 
 @bot.message_handler(func=lambda message: True)
 def handle_text_search(message):
     search_music_query(message, message.text)
 
 def search_music_query(message, query, is_top=False):
-    status_text = "🔥 Загружаю топ-чарт полных треков..." if is_top else f"🔎 Ищу полные треки: *{query}*..."
+    status_text = "🔥 Подбираю треки и ремиксы..." if is_top else f"🔎 Ищу абсолютно всё по запросу: *{query}*..."
     status_msg = bot.reply_to(message, status_text, parse_mode="Markdown")
 
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        clean_query = requests.utils.quote(query.strip())
-        tracks = []
+    tracks = []
+    success = False
 
-        # Источник 1: Jamendo API (дает полноценные треки без ограничений в 30 секунд)
-        jamendo_url = f"https://api.jamendo.com/v3.0/tracks/?client_id=5630a45d&format=json&limit=15&search={clean_query}&audioformat=mp32"
-        response = requests.get(jamendo_url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            for item in data.get('results', []):
-                audio_url = item.get('audio')
-                if audio_url:
-                    tracks.append({
-                        'title': item.get('name', 'Без названия'),
-                        'artist': item.get('artist_name', 'Неизвестный исполнитель'),
-                        'url': audio_url,
-                        'duration': int(item.get('duration', 180))
-                    })
-
-        # Источник 2: Дополнительный поиск через публичные музыкальные архивы, если первый дал мало результатов
-        if len(tracks) < 5:
-            archive_url = f"https://archive.org/advancedsearch.php?q=title%3A({clean_query})%20AND%20mediatype%3A(audio)&rows=10&output=json"
-            arch_res = requests.get(archive_url, headers=headers, timeout=10).json()
-            docs = arch_res.get('response', {}).get('docs', [])
+    # Пробуем разные инстансы Piped API для надежности поиска
+    for instance in PIPED_INSTANCES:
+        try:
+            search_url = f"{instance}/search?q={requests.utils.quote(query)}&filter=music_songs"
+            response = requests.get(search_url, timeout=6)
             
-            for doc in docs:
-                identifier = doc.get('identifier')
-                title = doc.get('title', 'Архивный трек')
-                creator = doc.get('creator', 'Сборник')
-                if identifier:
-                    # Формируем прямую ссылку на скачивание полного mp3 файла из архива
-                    tracks.append({
-                        'title': title if isinstance(title, str) else title[0],
-                        'artist': creator if isinstance(creator, str) else creator[0],
-                        'url': f"https://archive.org/download/{identifier}/{identifier}_vbr.mp3",
-                        'duration': 200
-                    })
+            if response.status_code == 200:
+                data = response.json()
+                items = data.get('items', [])
+                
+                for item in items:
+                    if item.get('type') == 'stream':
+                        url_path = item.get('url', '')
+                        video_id = url_path.split('v=')[-1] if 'v=' in url_path else ''
+                        if video_id:
+                            tracks.append({
+                                'id': video_id,
+                                'title': item.get('title', 'Без названия'),
+                                'uploader': item.get('uploaderName', 'Музыкант'),
+                                'duration': item.get('duration', 180)
+                            })
+                if tracks:
+                    success = True
+                    break
+        except Exception as e:
+            continue
 
-        if not tracks:
-            bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=status_msg.message_id,
-                text="❌ По вашему запросу полных треков не найдено. Попробуйте изменить ключевые слова."
-            )
-            return
-
-        user_data[message.chat.id] = {
-            'tracks': tracks,
-            'page': 0
-        }
-
-        send_page(message.chat.id, status_msg.message_id)
-
-    except Exception as e:
-        print(f"Ошибка поиска: {e}")
+    if not success or not tracks:
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=status_msg.message_id,
-            text="❌ Произошла ошибка при поиске. Попробуйте еще раз позже."
+            text="❌ Ничего не найдено. Попробуйте изменить поисковый запрос."
         )
+        return
+
+    user_data[message.chat.id] = {
+        'tracks': tracks[:20],  длинный список результатов
+        'page': 0
+    }
+
+    send_page(message.chat.id, status_msg.message_id)
 
 def send_page(chat_id, message_id):
     data = user_data.get(chat_id)
@@ -137,7 +125,7 @@ def send_page(chat_id, message_id):
 
     for idx, track in enumerate(current_tracks):
         global_idx = start_idx + idx
-        button_text = f"🎵 {track['artist']} — {track['title']}"
+        button_text = f"🎵 {track['uploader']} — {track['title']}"
         if len(button_text) > 55:
             button_text = button_text[:52] + '...'
         keyboard.add(types.InlineKeyboardButton(text=button_text, callback_data=f"play_{global_idx}"))
@@ -157,7 +145,7 @@ def send_page(chat_id, message_id):
     bot.edit_message_text(
         chat_id=chat_id,
         message_id=message_id,
-        text="👇 *Выберите нужный трек (полная версия):*",
+        text="👇 *Выберите нужный трек или ремикс из списка:*",
         parse_mode="Markdown",
         reply_markup=keyboard
     )
@@ -190,34 +178,56 @@ def handle_callbacks(call):
 
         if data and track_idx < len(data['tracks']):
             track = data['tracks'][track_idx]
+            video_id = track['id']
             
-            bot.answer_callback_query(call.id, text="📥 Скачиваю полную версию трека...")
+            bot.answer_callback_query(call.id, text="📥 Получаю прямую ссылку на полную версию...")
             bot.send_chat_action(chat_id, 'upload_document')
 
-            temp_filename = f"full_track_{chat_id}.mp3"
+            audio_download_url = None
+            
+            # Получаем прямую ссылку на аудиопоток через Piped API
+            for instance in PIPED_INSTANCES:
+                try:
+                    stream_url = f"{instance}/streams/{video_id}"
+                    res = requests.get(stream_url, timeout=6)
+                    if res.status_code == 200:
+                        stream_data = res.json()
+                        audio_streams = stream_data.get('audioStreams', [])
+                        if audio_streams:
+                            # Берем лучший аудиопоток
+                            audio_download_url = audio_streams[0].get('url')
+                            break
+                except Exception:
+                    continue
+
+            if not audio_download_url:
+                bot.send_message(chat_id, "❌ Не удалось получить поток для этого трека. Попробуйте другой.")
+                return
+
+            temp_filename = f"track_{chat_id}.mp3"
 
             try:
-                # Загружаем полный файл на сервер Render
-                file_response = requests.get(track['url'], timeout=20)
-                if file_response.status_code == 200:
+                # Скачиваем аудиофайл на сервер Render
+                file_resp = requests.get(audio_download_url, timeout=20)
+                if file_resp.status_code == 200:
                     with open(temp_filename, 'wb') as f:
-                        f.write(file_response.content)
+                        f.write(file_resp.content)
 
-                    # Отправляем в Telegram с принудительным расширением mp3 для отображения плеера
+                    # Отправляем в Telegram с принудительным расширением mp3 для работы плеера
                     with open(temp_filename, 'rb') as audio_file:
                         bot.send_audio(
                             chat_id=chat_id,
                             audio=('audio.mp3', audio_file.read()),
                             title=track['title'],
-                            performer=track['artist'],
+                            performer=track['uploader'],
                             duration=track['duration']
                         )
                 else:
-                    raise Exception("Не удалось скачать поток")
+                    raise Exception("Ошибка скачивания потока")
 
             except Exception as e:
-                print(f"Ошибка загрузки полного файла: {e}")
-                bot.send_message(chat_id, "❌ Не удалось загрузить этот трек. Попробуйте выбрать другой.")
+                print(f"Ошибка отправки: {e}")
+                bot.send_message(chat_id, "❌ Ошибка при отправке аудиозаписи.")
             finally:
                 if os.path.exists(temp_filename):
                     os.remove(temp_filename)

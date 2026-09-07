@@ -1,4 +1,5 @@
 import os
+import time
 import telebot
 from telebot import types
 import yt_dlp
@@ -214,4 +215,12 @@ def handle_callbacks(call):
         else:
             bot.answer_callback_query(call.id, text="Результаты устарели. Введи запрос заново.")
 
-bot.infinity_polling(skip_pending=True)
+if __name__ == '__main__':
+    print("Бот запускается... Ожидание освобождения потока...")
+    time.sleep(5)
+    while True:
+        try:
+            bot.infinity_polling(skip_pending=True)
+        except Exception as e:
+            print(f"Ошибка в polling: {e}")
+            time.sleep(3)

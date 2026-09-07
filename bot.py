@@ -1,17 +1,4 @@
-import os
-import urllib.parse
-import urllib.request
-import json
-import telebot
-
-TOKEN = os.environ.get('BOT_TOKEN')
-bot = telebot.TeleBot(TOKEN)
-
-@bot.message_handler(commands=['start'])
-def start_cmd(message):
-    bot.reply_to(
-        message, 
-        "Привет! Напиши мне название песни или исполнителя, и я пришлю MP3 прямо в этот чат."
+чат."
     )
 
 @bot.message_handler(func=lambda message: True)
@@ -73,11 +60,4 @@ def download_and_send_audio(message):
             bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=status_msg.message_id,
-                text="❌ Не удалось найти файл. Попробуйте ввести другое название песни."
-            )
-
-    # Удаление временного файла
-    if os.path.exists(filename):
-        os.remove(filename)
-
-bot.infinity_polling()
+                

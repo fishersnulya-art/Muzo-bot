@@ -7,10 +7,7 @@ import imageio_ffmpeg
 TOKEN = os.environ.get('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN, skip_pending=True)
 
-# Получаем путь к встроенному ffmpeg через python-пакет (работает на Render без системных настроек)
 FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
-
-# Временное хранилище результатов поиска для каждого пользователя
 user_data = {}
 
 def get_main_keyboard():
@@ -61,7 +58,6 @@ def search_music_query(message, query, is_top=False):
     status_msg = bot.reply_to(message, status_text, parse_mode="Markdown")
 
     try:
-        # Настройки поиска через yt-dlp без скачивания самого файла на этапе поиска
         ydl_opts = {
             'extract_flat': 'in_playlist',
             'default_search': 'ytsearch10' if not is_top else 'ytsearch15',
@@ -121,7 +117,6 @@ def send_page(chat_id, message_id):
 
     for idx, track in enumerate(current_tracks):
         global_idx = start_idx + idx
-        # Обрезаем слишком длинные названия для кнопок
         title = track['title'][:45] + '...' if len(track['title']) > 45 else track['title']
         button_text = f"🎵 {title}"
         keyboard.add(types.InlineKeyboardButton(text=button_text, callback_data=f"play_{global_idx}"))
@@ -202,7 +197,7 @@ def handle_callbacks(call):
                     with open(filename, 'rb') as audio_file:
                         bot.send_audio(
                             chat_id=chat_id,
-                            audio=audio_file,
+                            audio=('audio.mp3', audio_file.read()),
                             title=track['title'],
                             performer="MuzoBot",
                             duration=track['duration']

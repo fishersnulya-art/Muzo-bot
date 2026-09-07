@@ -59,5 +59,4 @@ def download_and_send_audio(message):
             print(f"Ошибка запасного метода: {fallback_error}")
             bot.edit_message_text(
                 chat_id=message.chat.id,
-                message_id=status_msg.message_id,
-                
+                message_id=status

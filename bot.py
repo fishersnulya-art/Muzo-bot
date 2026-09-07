@@ -1,14 +1,13 @@
 import os
 import time
+import requests
 import telebot
 from telebot import types
-import yt_dlp
-import imageio_ffmpeg
 
 TOKEN = os.environ.get('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN, skip_pending=True)
 
-FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+# Временное хранилище результатов для каждого чата
 user_data = {}
 
 def get_main_keyboard():
@@ -22,8 +21,8 @@ def get_main_keyboard():
 def start_cmd(message):
     welcome_text = (
         f"👋 Привет, *{message.from_user.first_name}*!\n\n"
-        "🎵 Я музыкальный бот. Я ищу и скачиваю *полные версии треков* "
-        "прямо в плеер Telegram.\n\n"
+        "🎵 Я мультиисточниковый музыкальный бот. Я ищу треки по глобальным каталогам "
+        "и отправляю их прямо в плеер Telegram.\n\n"
         "🔍 *Напиши название песни или исполнителя:*"
     )
     bot.send_message(
@@ -38,55 +37,67 @@ def start_cmd(message):
 def help_cmd(message):
     help_text = (
         "📌 *Как пользоваться ботом:*\n\n"
-        "1. Отправь имя артиста или трек (например: `Каспийский груз`).\n"
-        "2. Выбери нужный вариант из списка.\n"
-        "3. Используй страницы ⬅️ / ➡️, если результатов много.\n"
-        "4. Получи полную песню в плеере Telegram!"
+        "1. Отправь имя артиста или трек (например: `Каспийский груз` или `Miyagi`).\n"
+        "2. Выбери нужный вариант из интерактивного списка.\n"
+        "3. Используй страницы ⬅️ / ➡️ для навигации.\n"
+        "4. Получи аудиозапись в стандартном плеере Telegram!"
     )
     bot.send_message(message.chat.id, help_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['top'])
 @bot.message_handler(func=lambda m: m.text == "🔥 Популярные треки")
 def top_music(message):
-    search_music_query(message, "русские новинки хиты топ", is_top=True)
+    search_music_query(message, "Global Chart Hits", is_top=True)
 
 @bot.message_handler(func=lambda message: True)
 def handle_text_search(message):
     search_music_query(message, message.text)
 
 def search_music_query(message, query, is_top=False):
-    status_text = "🔥 Подбираю популярные треки..." if is_top else f"🔎 Ищу полные версии: *{query}*..."
+    status_text = "🔥 Подбираю чарт-хиты..." if is_top else f"🔎 Ищу по всем каталогам: *{query}*..."
     status_msg = bot.reply_to(message, status_text, parse_mode="Markdown")
 
     try:
-        ydl_opts = {
-            'extract_flat': 'in_playlist',
-            'default_search': 'ytsearch15',
-            'quiet': True,
-            'geo_bypass': True,
-            'extractor_args': {'youtube': {'player_client': ['ios', 'mweb', 'android']}},
-        }
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        clean_query = requests.utils.quote(query.strip())
+        limit = 15 if is_top else 10
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_result = ydl.extract_info(f"ytsearch15:{query}", download=False)
-            entries = search_result.get('entries', [])
+        tracks = []
 
-        if not entries:
+        # Источник 1: Apple Music Каталог
+        itunes_url = f"https://itunes.apple.com/search?term={clean_query}&media=music&limit={limit}"
+        res = requests.get(itunes_url, headers=headers, timeout=8).json()
+        for item in res.get('results', []):
+            preview = item.get('previewUrl')
+            if preview:
+                tracks.append({
+                    'title': item.get('trackName', 'Без названия'),
+                    'artist': item.get('artistName', 'Неизвестный исполнитель'),
+                    'url': preview,
+                    'duration': int(item.get('trackTimeMillis', 30000) / 1000)
+                })
+
+        # Источник 2: Jamendo Open Music API (резервный каталог свободной и популярной музыки)
+        if len(tracks) < 5:
+            jamendo_url = f"https://api.jamendo.com/v3.0/tracks/?client_id=5630a45d&format=json&limit=10&search={clean_query}"
+            j_res = requests.get(jamendo_url, headers=headers, timeout=8).json()
+            for item in j_res.get('results', []):
+                audio = item.get('audio')
+                if audio:
+                    tracks.append({
+                        'title': item.get('name', 'Без названия'),
+                        'artist': item.get('artist_name', 'Неизвестный исполнитель'),
+                        'url': audio,
+                        'duration': int(item.get('duration', 180))
+                    })
+
+        if not tracks:
             bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=status_msg.message_id,
-                text="❌ Ничего не найдено. Попробуй уточнить запрос."
+                text="❌ По данному запросу ничего не найдено. Попробуй изменить название."
             )
             return
-
-        tracks = []
-        for entry in entries:
-            if entry:
-                tracks.append({
-                    'id': entry.get('id'),
-                    'title': entry.get('title', 'Без названия'),
-                    'duration': entry.get('duration', 0)
-                })
 
         user_data[message.chat.id] = {
             'tracks': tracks,
@@ -120,8 +131,9 @@ def send_page(chat_id, message_id):
 
     for idx, track in enumerate(current_tracks):
         global_idx = start_idx + idx
-        title = track['title'][:45] + '...' if len(track['title']) > 45 else track['title']
-        button_text = f"🎵 {title}"
+        button_text = f"🎵 {track['artist']} — {track['title']}"
+        if len(button_text) > 60:
+            button_text = button_text[:57] + '...'
         keyboard.add(types.InlineKeyboardButton(text=button_text, callback_data=f"play_{global_idx}"))
 
     nav_buttons = []
@@ -172,55 +184,38 @@ def handle_callbacks(call):
 
         if data and track_idx < len(data['tracks']):
             track = data['tracks'][track_idx]
-            video_id = track['id']
             
-            bot.answer_callback_query(call.id, text="📥 Скачиваю полную версию трека...")
+            bot.answer_callback_query(call.id, text="🚀 Загружаю аудио в плеер...")
             bot.send_chat_action(chat_id, 'upload_document')
 
-            filename = f"song_{chat_id}.mp3"
-
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': filename.replace('.mp3', ''),
-                'ffmpeg_location': FFMPEG_PATH,
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-                'quiet': True,
-                'noplaylist': True,
-                'geo_bypass': True,
-                'extractor_args': {'youtube': {'player_client': ['ios', 'mweb', 'android']}},
-            }
+            temp_filename = f"track_{chat_id}.mp3"
 
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+                # Скачиваем файл на сервер Render для корректного формирования тегов
+                audio_bytes = requests.get(track['url'], timeout=15).content
+                with open(temp_filename, 'wb') as f:
+                    f.write(audio_bytes)
 
-                if os.path.exists(filename):
-                    with open(filename, 'rb') as audio_file:
-                        bot.send_audio(
-                            chat_id=chat_id,
-                            audio=('audio.mp3', audio_file.read()),
-                            title=track['title'],
-                            performer="MuzoBot",
-                            duration=track['duration']
-                        )
-                else:
-                    raise Exception("Файл не конвертировался")
-
+                # Отправка с принудительным указанием имени файла для отображения плеера
+                with open(temp_filename, 'rb') as audio_file:
+                    bot.send_audio(
+                        chat_id=chat_id,
+                        audio=('audio.mp3', audio_file.read()),
+                        title=track['title'],
+                        performer=track['artist'],
+                        duration=track['duration']
+                    )
             except Exception as e:
-                print(f"Ошибка загрузки: {e}")
-                bot.send_message(chat_id, "❌ Не удалось скачать этот трек. Попробуй выбрать другой.")
+                print(f"Ошибка скачивания/отправки: {e}")
+                bot.send_message(chat_id, "❌ Не удалось отправить этот аудиофайл. Выберите другой вариант.")
             finally:
-                if os.path.exists(filename):
-                    os.remove(filename)
+                if os.path.exists(temp_filename):
+                    os.remove(temp_filename)
         else:
             bot.answer_callback_query(call.id, text="Результаты устарели. Введи запрос заново.")
 
 if __name__ == '__main__':
-    print("Бот запускается... Ожидание освобождения потока...")
+    print("Мульти-бот запускается... Ожидание освобождения потока...")
     time.sleep(5)
     while True:
         try:

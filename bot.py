@@ -136,11 +136,11 @@ def search_tracks_engine(query: str) -> List[Dict[str, Any]]:
 
     tracks = []
     
-    # 1. Try Piped API instances
+    # 1. Try Piped API instances without strict filtering for universal search support
     for instance in PIPED_INSTANCES:
         try:
             search_url = f"{instance}/search"
-            params = {"q": query, "filter": "music_songs"}
+            params = {"q": query}
             resp = execute_with_retry(search_url, params=params, timeout=5)
             
             if resp and resp.status_code == 200:

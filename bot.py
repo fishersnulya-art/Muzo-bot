@@ -7,7 +7,7 @@ from telebot import types
 TOKEN = os.environ.get('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN, skip_pending=True)
 
-# Проверенные стабильные шлюзы для поиска и мгновенной выдачи музыки
+# Зеркала музыкального API для обхода блокировок
 PIPED_INSTANCES = [
     "https://pipedapi.kavin.rocks",
     "https://pipedapi.drgns.space",
@@ -27,33 +27,28 @@ def get_main_keyboard():
 def start_cmd(message):
     welcome_text = (
         f"👋 Привет, *{message.from_user.first_name}*!\n\n"
-        "🎵 Я супер-музыкальный бот. Ищу любые треки, ремиксы, лайвы и полные версии "
-        "мгновенно и без задержек.\n\n"
+        "🎵 Я музыкальный бот. Ищу любые полные версии треков, ремиксы и клубные миксы "
+        "мгновенно и без сбоев.\n\n"
         "🔍 *Напиши название песни, исполнителя или ремикса:*"
     )
-    bot.send_message(
-        message.chat.id, 
-        welcome_text, 
-        parse_mode="Markdown", 
-        reply_markup=get_main_keyboard()
-    )
+    bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
 @bot.message_handler(commands=['help'])
 @bot.message_handler(func=lambda m: m.text == "❓ Помощь")
 def help_cmd(message):
     help_text = (
         "📌 *Как пользоваться ботом:*\n\n"
-        "1. Напиши в чат название трека или автора (например: `Miyagi ремикс` или `Каспийский груз`).\n"
+        "1. Напиши в чат название трека или артиста (например: `Каспийский груз ремикс`).\n"
         "2. Выбери нужную песню из интерактивного списка.\n"
-        "3. Используй страницы ⬅️ / ➡️ для поиска.\n"
-        "4. Трек мгновенно прилетит в твой аудио плеер!"
+        "3. Используй страницы ⬅️ / ➡️ для переключения.\n"
+        "4. Трек мгновенно прилетит в твой плеер!"
     )
     bot.send_message(message.chat.id, help_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['top'])
 @bot.message_handler(func=lambda m: m.text == "🔥 Популярное & Ремиксы")
 def top_music(message):
-    search_music_query(message, "русские хиты ремиксы клубные 2026", is_top=True)
+    search_music_query(message, "русские хиты ремиксы клубные", is_top=True)
 
 @bot.message_handler(func=lambda message: True)
 def handle_text_search(message):
@@ -179,7 +174,7 @@ def handle_callbacks(call):
             track = data['tracks'][track_idx]
             video_id = track['id']
             
-            bot.answer_callback_query(call.id, text="⚡ Отправляю полную версию...")
+            bot.answer_callback_query(call.id, text="⚡ Загружаю полную версию...")
             bot.send_chat_action(chat_id, 'upload_document')
 
             audio_download_url = None
@@ -204,7 +199,6 @@ def handle_callbacks(call):
             temp_filename = f"track_{chat_id}.mp3"
 
             try:
-                # Быстрая потоковая загрузка с ограничением по времени (без зависаний)
                 with requests.get(audio_download_url, stream=True, timeout=15) as r:
                     r.raise_for_status()
                     with open(temp_filename, 'wb') as f:
@@ -212,7 +206,6 @@ def handle_callbacks(call):
                             if chunk:
                                 f.write(chunk)
 
-                # Отправка готового файла в плеер Telegram
                 with open(temp_filename, 'rb') as audio_file:
                     bot.send_audio(
                         chat_id=chat_id,
@@ -231,7 +224,7 @@ def handle_callbacks(call):
             bot.answer_callback_query(call.id, text="Результаты устарели. Введите запрос заново.")
 
 if __name__ == '__main__':
-    print("Бот запущен и готов к работе...")
+    print("Бот запущен...")
     while True:
         try:
             bot.infinity_polling(skip_pending=True)

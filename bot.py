@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 =============================================================================
-PROPRIETARY TELEGRAM MUSIC BOT ENGINE (v5.4 Enterprise Edition)
+PROPRIETARY TELEGRAM MUSIC BOT ENGINE (v5.5 Enterprise Edition)
 Architecture: Multi-Layer Fallback Search, Robust Network Fault Tolerance,
 In-Memory Smart Caching, Advanced Long-Polling Stabilization, Admin Telemetry.
 =============================================================================
@@ -41,8 +41,6 @@ logger = logging.getLogger("EnterpriseMusicBot")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     logger.critical("FATAL: BOT_TOKEN environment variable is missing!")
-    # For safety/fallback during tests or local setups if needed, 
-    # but we will enforce graceful exit or fallback placeholder.
     BOT_TOKEN = "PLACEHOLDER_TOKEN"
 
 # Multi-instance fallback pools for maximum resilience against domain blacklisting
@@ -77,7 +75,7 @@ class BotMemoryManager:
     def __init__(self):
         self.user_sessions: Dict[int, Dict[str, Any]] = {}
         self.search_cache: Dict[str, List[Dict[str, Any]]] = {}
-        self.download_cache: Dict[str, str] = {} # video_id -> direct_audio_url
+        self.download_cache: Dict[str, str] = {}
         self.analytics = {
             "total_searches": 0,
             "total_downloads": 0,
@@ -98,10 +96,8 @@ class BotMemoryManager:
         with self.lock:
             self.analytics["total_searches"] += 1
             self.analytics["active_users"].add(user_id)
-            # Maintain cache size
             if len(self.search_cache) > 200:
-                # Pop oldest keys roughly
-                keys_to_remove = list(self.search_cache.keys()[:50])
+                keys_to_remove = list(self.search_cache.keys())[:50]
                 for k in keys_to_remove:
                     self.search_cache.pop(k, None)
 
@@ -116,10 +112,6 @@ memory = BotMemoryManager()
 # 4. NETWORK & REQUEST LAYER WITH EXPONENTIAL BACKOFF
 # ---------------------------------------------------------------------------
 def execute_with_retry(url: str, params: Optional[Dict] = None, timeout: int = 6, max_retries: int = 3) -> Optional[requests.Response]:
-    """
-    Performs robust HTTP GET requests with randomized user agents, timeouts,
-    and exponential backoff retry mechanics to handle transient network drops.
-    """
     headers = {"User-Agent": random.choice(USER_AGENTS)}
     for attempt in range(1, max_retries + 1):
         try:
@@ -137,11 +129,6 @@ def execute_with_retry(url: str, params: Optional[Dict] = None, timeout: int = 6
 # 5. MULTI-ENGINE SEARCH SUBSYSTEM (PIPED & INVIDIOUS FALLBACKS)
 # ---------------------------------------------------------------------------
 def search_tracks_engine(query: str) -> List[Dict[str, Any]]:
-    """
-    Executes a multi-tier search query across multiple independent server instances.
-    If Piped fails or blocks, it automatically shifts to fallback endpoints or alternative engines.
-    """
-    # Check cache first to maximize response velocity
     query_hash = hashlib.md5(query.lower().strip().encode('utf-8')).hexdigest()
     if query_hash in memory.search_cache:
         logger.info(f"Serving query '{query}' from internal memory cache.")
@@ -166,8 +153,8 @@ def search_tracks_engine(query: str) -> List[Dict[str, Any]]:
                         if video_id:
                             tracks.append({
                                 'id': video_id,
-                                'title': item.get('title', 'ÐÐµÐ· Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ñ'),
-                                'uploader': item.get('uploaderName', 'ÐÑÐ¿Ð¾Ð»Ð½Ð¸ÑÐµÐ»Ñ'),
+                                'title': item.get('title', 'Без названия'),
+                                'uploader': item.get('uploaderName', 'Исполнитель'),
                                 'duration': item.get('duration', 180),
                                 'source': 'piped'
                             })
@@ -193,8 +180,8 @@ def search_tracks_engine(query: str) -> List[Dict[str, Any]]:
                         if video_id:
                             tracks.append({
                                 'id': video_id,
-                                'title': item.get('title', 'ÐÐµÐ· Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ñ'),
-                                'uploader': item.get('author', 'ÐÑÐ¿Ð¾Ð»Ð½Ð¸ÑÐµÐ»Ñ'),
+                                'title': item.get('title', 'Без названия'),
+                                'uploader': item.get('author', 'Исполнитель'),
                                 'duration': item.get('lengthSeconds', 180),
                                 'source': 'invidious'
                             })
@@ -205,20 +192,15 @@ def search_tracks_engine(query: str) -> List[Dict[str, Any]]:
                 logger.warning(f"Invidious instance {instance} failed: {e}")
                 continue
 
-    # Save to cache if results found
     if tracks:
         memory.search_cache[query_hash] = tracks
 
     return tracks
 
 def fetch_audio_stream_url(video_id: str) -> Optional[str]:
-    """
-    Resolves direct media download stream URL for a given track ID with multiple failover instances.
-    """
     if video_id in memory.download_cache:
         return memory.download_cache[video_id]
 
-    # Check Piped streams
     for instance in PIPED_INSTANCES:
         try:
             stream_url = f"{instance}/streams/{video_id}"
@@ -227,7 +209,6 @@ def fetch_audio_stream_url(video_id: str) -> Optional[str]:
                 data = resp.json()
                 audio_streams = data.get('audioStreams', [])
                 if audio_streams:
-                    # Filter best quality audio stream
                     best_stream = max(audio_streams, key=lambda x: x.get('bitrate', 0))
                     direct_url = best_stream.get('url')
                     if direct_url:
@@ -237,7 +218,6 @@ def fetch_audio_stream_url(video_id: str) -> Optional[str]:
             logger.warning(f"Failed stream lookup on Piped {instance} for ID {video_id}: {e}")
             continue
 
-    # Check Invidious streams fallback
     for instance in INVIDIOUS_INSTANCES:
         try:
             stream_url = f"{instance}/api/v1/videos/{video_id}"
@@ -263,53 +243,25 @@ def fetch_audio_stream_url(video_id: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 def get_main_keyboard() -> types.ReplyKeyboardMarkup:
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn_top = types.KeyboardButton("ð¥ ÐÐ¾Ð¿ÑÐ»ÑÑÐ½ÑÐµ ÑÐ¸ÑÑ & Ð ÐµÐ¼Ð¸ÐºÑÑ")
-    btn_trending = types.KeyboardButton("ð Ð¢ÑÐµÐ½Ð´Ñ Ð½ÐµÐ´ÐµÐ»Ð¸")
-    btn_random = types.KeyboardButton("ð² Ð¡Ð»ÑÑÐ°Ð¹Ð½ÑÐ¹ ÑÑÐµÐº")
-    btn_help = types.KeyboardButton("â ÐÐ¾Ð¼Ð¾ÑÑ & FAQ")
+    btn_top = types.KeyboardButton("🔥 Популярные хиты & Ремиксы")
+    btn_trending = types.KeyboardButton("📈 Тренды недели")
+    btn_random = types.KeyboardButton("🎲 Случайный трек")
+    btn_help = types.KeyboardButton("❓ Помощь & FAQ")
     markup.add(btn_top, btn_trending, btn_random, btn_help)
     return markup
-
-def build_pagination_keyboard(tracks_count: int, page: int, per_page: int = 5) -> types.InlineKeyboardMarkup:
-    keyboard = types.InlineKeyboardMarkup()
-    start_idx = page * per_page
-    end_idx = min(start_idx + per_page, tracks_count)
-
-    for idx in range(start_idx, end_idx):
-        # Buttons are added dynamically in the renderer
-        pass
-
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(types.InlineKeyboardButton("â¬ï¸ ÐÐ°Ð·Ð°Ð´", callback_data="page_prev"))
-    
-    total_pages = max(1, (tracks_count + per_page - 1) // per_page)
-    nav_buttons.append(types.InlineKeyboardButton(f"ð {page + 1}/{total_pages}", callback_data="page_num"))
-
-    if end_idx < tracks_count:
-        nav_buttons.append(types.InlineKeyboardButton("ÐÐ¿ÐµÑÐµÐ´ â¡ï¸", callback_data="page_next"))
-
-    if nav_buttons:
-        keyboard.row(*nav_buttons)
-    
-    return keyboard
 
 # ---------------------------------------------------------------------------
 # 7. TELEGRAM BOT EVENT HANDLERS & ROUTING LOGIC
 # ---------------------------------------------------------------------------
 @bot.message_handler(commands=['start'])
 def handle_start(message: types.Message):
-    user_name = message.from_user.first_name or "ÐÐµÐ»Ð¾Ð¼Ð°Ð½"
+    user_name = message.from_user.first_name or "Меломан"
     welcome_text = (
-        f"ð§ *ÐÑÐ¸Ð²ÐµÑÑÑÐ²ÑÑ, {user_name}!*
-
-"
-        "ÐÐ¾Ð±ÑÐ¾ Ð¿Ð¾Ð¶Ð°Ð»Ð¾Ð²Ð°ÑÑ Ð² Ð¿ÑÐµÐ¼Ð¸Ð°Ð»ÑÐ½ÑÐ¹ Ð¼ÑÐ·ÑÐºÐ°Ð»ÑÐ½ÑÐ¹ ÑÐµÑÐ¼Ð¸Ð½Ð°Ð». "
-        "Ð¯ Ð¼Ð¾Ð³Ñ Ð½Ð°Ð¹ÑÐ¸ Ð°Ð±ÑÐ¾Ð»ÑÑÐ½Ð¾ Ð»ÑÐ±ÑÑ Ð¿ÐµÑÐ½Ñ, ÑÐµÐ´ÐºÐ¸Ð¹ ÑÐµÐ¼Ð¸ÐºÑ, ÐºÐ»ÑÐ±Ð½ÑÐ¹ Ð¼Ð¸ÐºÑ Ð¸Ð»Ð¸ Ð¶Ð¸Ð²Ð¾Ðµ Ð²ÑÑÑÑÐ¿Ð»ÐµÐ½Ð¸Ðµ "
-        "Ð² Ð¼Ð°ÐºÑÐ¸Ð¼Ð°Ð»ÑÐ½Ð¾Ð¼ ÐºÐ°ÑÐµÑÑÐ²Ðµ Ð±ÐµÐ· Ð¾Ð³ÑÐ°Ð½Ð¸ÑÐµÐ½Ð¸Ð¹.
-
-"
-        "ð *ÐÑÐ¾ÑÑÐ¾ Ð¾ÑÐ¿ÑÐ°Ð²Ñ Ð¼Ð½Ðµ Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ ÑÑÐµÐºÐ° Ð¸Ð»Ð¸ Ð²Ð¾ÑÐ¿Ð¾Ð»ÑÐ·ÑÐ¹ÑÑ Ð¼ÐµÐ½Ñ Ð½Ð¸Ð¶Ðµ:*"
+        f"🎧 *Приветствую, {user_name}!*\n\n"
+        "Добро пожаловать в премиальный музыкальный терминал. "
+        "Я могу найти абсолютно любую песню, редкий ремикс, клубный микс или живое выступление "
+        "в максимальном качестве без ограничений.\n\n"
+        "👇 *Просто отправь мне название трека или воспользуйся меню ниже:*"
     )
     try:
         bot.send_message(
@@ -323,52 +275,38 @@ def handle_start(message: types.Message):
         logger.error(f"Error in handle_start: {e}")
 
 @bot.message_handler(commands=['help'])
-@bot.message_handler(func=lambda m: m.text in ["â ÐÐ¾Ð¼Ð¾ÑÑ & FAQ", "â ÐÐ¾Ð¼Ð¾ÑÑ"])
+@bot.message_handler(func=lambda m: m.text in ["❓ Помощь & FAQ", "❓ Помощь"])
 def handle_help(message: types.Message):
     help_text = (
-        "ð *ÐÐ½ÑÑÑÑÐºÑÐ¸Ñ Ð¿Ð¾ Ð¸ÑÐ¿Ð¾Ð»ÑÐ·Ð¾Ð²Ð°Ð½Ð¸Ñ Ð±Ð¾ÑÐ°:*
-
-"
-        "1. *ÐÐ¾Ð¸ÑÐº:* ÐÐ°Ð¿Ð¸ÑÐ¸ÑÐµ Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ Ð¸ÑÐ¿Ð¾Ð»Ð½Ð¸ÑÐµÐ»Ñ, ÑÑÐµÐºÐ° Ð¸Ð»Ð¸ Ð¶Ð°Ð½ÑÐ° (Ð½Ð°Ð¿ÑÐ¸Ð¼ÐµÑ: `Miyagi ÑÐµÐ¼Ð¸ÐºÑ` Ð¸Ð»Ð¸ `ÐÐ°ÑÐ¿Ð¸Ð¹ÑÐºÐ¸Ð¹ Ð³ÑÑÐ· ÐºÐ»ÑÐ±Ð½Ð°Ñ`).
-"
-        "2. *ÐÑÐ±Ð¾Ñ:* ÐÐ°Ð¶Ð¼Ð¸ÑÐµ Ð½Ð° Ð½ÑÐ¶Ð½ÑÑ ÐºÐ½Ð¾Ð¿ÐºÑ Ð² Ð¸Ð½ÑÐµÑÐ°ÐºÑÐ¸Ð²Ð½Ð¾Ð¼ ÑÐ¿Ð¸ÑÐºÐµ.
-"
-        "3. *ÐÐ°Ð²Ð¸Ð³Ð°ÑÐ¸Ñ:* ÐÐµÑÐµÐºÐ»ÑÑÐ°Ð¹ÑÐµ ÑÑÑÐ°Ð½Ð¸ÑÑ ÐºÐ½Ð¾Ð¿ÐºÐ°Ð¼Ð¸ â¬ï¸ Ð¸ â¡ï¸, ÐµÑÐ»Ð¸ ÑÐµÐ·ÑÐ»ÑÑÐ°ÑÐ¾Ð² Ð¼Ð½Ð¾Ð³Ð¾.
-"
-        "4. *ÐÐ¾ÑÐ¿ÑÐ¾Ð¸Ð·Ð²ÐµÐ´ÐµÐ½Ð¸Ðµ:* Ð¢ÑÐµÐº Ð¿ÑÐ¸Ð»ÐµÑÐ¸Ñ Ð² Ð²Ð°Ñ Ð°ÑÐ´Ð¸Ð¾-Ð¿Ð»ÐµÐµÑ Ð² ÑÐ¾ÑÐ¼Ð°ÑÐµ MP3.
-
-"
-        "âï¸ ÐÐ¾Ñ Ð¾Ð±Ð¾ÑÑÐ´Ð¾Ð²Ð°Ð½ ÑÐ¸ÑÑÐµÐ¼Ð¾Ð¹ Ð¼Ð½Ð¾Ð³Ð¾ÑÑÐ¾Ð²Ð½ÐµÐ²Ð¾Ð³Ð¾ Ð¾Ð±ÑÐ¾Ð´Ð° Ð¾ÑÐ¸Ð±Ð¾Ðº Ð¸ ÑÐ°Ð±Ð¾ÑÐ°ÐµÑ 24/7."
+        "📖 *Инструкция по использованию бота:*\n\n"
+        "1. *Поиск:* Напишите название исполнителя, трека или жанра (например: `Miyagi ремикс` или `Каспийский груз клубная`).\n"
+        "2. *Выбор:* Нажмите на нужную кнопку в интерактивном списке.\n"
+        "3. *Навигация:* Переключайте страницы кнопками ⬅️ и ➡️, если результатов много.\n"
+        "4. *Воспроизведение:* Трек прилетит в ваш аудио-плеер в формате MP3.\n\n"
+        "⚙️ Бот оборудован системой многоуровневого обхода ошибок и работает 24/7."
     )
     bot.send_message(message.chat.id, help_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['stats'])
 def handle_admin_stats(message: types.Message):
-    # Basic telemetry command for service monitoring
     uptime = datetime.now() - memory.analytics["start_time"]
     stats_text = (
-        "ð *Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° ÑÐ°Ð±Ð¾ÑÑ ÑÐ¸ÑÑÐµÐ¼Ñ:*
-
-"
-        f"â± ÐÐ¿ÑÐ°Ð¹Ð¼: `{str(uptime).split('.')[0]}`
-"
-        f"ð ÐÑÐµÐ³Ð¾ Ð¿Ð¾Ð¸ÑÐºÐ¾Ð²ÑÑ Ð·Ð°Ð¿ÑÐ¾ÑÐ¾Ð²: `{memory.analytics['total_searches']}`
-"
-        f"ð¥ ÐÑÐµÐ³Ð¾ ÑÐºÐ°ÑÐ°Ð½Ð¾ ÑÑÐµÐºÐ¾Ð²: `{memory.analytics['total_downloads']}`
-"
-        f"ð¥ Ð£Ð½Ð¸ÐºÐ°Ð»ÑÐ½ÑÑ Ð¿Ð¾Ð»ÑÐ·Ð¾Ð²Ð°ÑÐµÐ»ÐµÐ¹: `{len(memory.analytics['active_users'])}`
-"
-        "ð¢ Ð¡ÑÐ°ÑÑÑ: ÐÑÐµ ÑÐ·Ð»Ñ ÑÑÐ°Ð±Ð¸Ð»ÑÐ½Ñ."
+        "📊 *Статистика работы системы:*\n\n"
+        f"⏱ Аптайм: `{str(uptime).split('.')[0]}`\n"
+        f"🔍 Всего поисковых запросов: `{memory.analytics['total_searches']}`\n"
+        f"📥 Всего скачано треков: `{memory.analytics['total_downloads']}`\n"
+        f"👥 Уникальных пользователей: `{len(memory.analytics['active_users'])}`\n"
+        "🟢 Статус: Все узлы стабильны."
     )
     bot.send_message(message.chat.id, stats_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['top'])
-@bot.message_handler(func=lambda m: m.text in ["ð¥ ÐÐ¾Ð¿ÑÐ»ÑÑÐ½ÑÐµ ÑÐ¸ÑÑ & Ð ÐµÐ¼Ð¸ÐºÑÑ", "ð Ð¢ÑÐµÐ½Ð´Ñ Ð½ÐµÐ´ÐµÐ»Ð¸", "ð² Ð¡Ð»ÑÑÐ°Ð¹Ð½ÑÐ¹ ÑÑÐµÐº"])
+@bot.message_handler(func=lambda m: m.text in ["🔥 Популярные хиты & Ремиксы", "📈 Тренды недели", "🎲 Случайный трек"])
 def handle_preset_queries(message: types.Message):
     text = message.text
-    if "ÐÐ¾Ð¿ÑÐ»ÑÑÐ½ÑÐµ" in text:
-        query = "ÑÑÑÑÐºÐ¸Ðµ ÑÐ¸ÑÑ ÑÐµÐ¼Ð¸ÐºÑÑ ÐºÐ»ÑÐ±Ð½ÑÐµ ÑÐ¾Ð¿"
-    elif "Ð¢ÑÐµÐ½Ð´Ñ" in text:
+    if "Популярные" in text:
+        query = "русские хиты ремиксы клубные топ"
+    elif "Тренды" in text:
         query = "tiktok trending remix hits 2026"
     else:
         queries = ["phonk drift mix", "deep house remix hits", "russian rap remix", "synthwave cyberpunk mix"]
@@ -387,7 +325,7 @@ def execute_search_and_render(message: types.Message, query: str):
     user_id = message.from_user.id
     
     memory.log_search(user_id, query)
-    status_msg = bot.reply_to(message, f"ð Ð¡ÐºÐ°Ð½Ð¸ÑÑÑ Ð±Ð°Ð·Ñ Ð´Ð°Ð½Ð½ÑÑ Ð¿Ð¾ Ð·Ð°Ð¿ÑÐ¾ÑÑ: *{query}*...", parse_mode="Markdown")
+    status_msg = bot.reply_to(message, f"🔎 Сканирую базы данных по запросу: *{query}*...", parse_mode="Markdown")
 
     try:
         tracks = search_tracks_engine(query)
@@ -396,7 +334,7 @@ def execute_search_and_render(message: types.Message, query: str):
             bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_msg.message_id,
-                text="â ÐÐ¾ Ð²Ð°ÑÐµÐ¼Ñ Ð·Ð°Ð¿ÑÐ¾ÑÑ Ð½Ð¸ÑÐµÐ³Ð¾ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾. ÐÐ¾Ð¿ÑÐ¾Ð±ÑÐ¹ÑÐµ Ð¸Ð·Ð¼ÐµÐ½Ð¸ÑÑ ÑÐ¾ÑÐ¼ÑÐ»Ð¸ÑÐ¾Ð²ÐºÑ Ð¸Ð»Ð¸ Ð²Ð²ÐµÑÑÐ¸ Ð°Ð²ÑÐ¾ÑÐ°."
+                text="❌ По вашему запросу ничего не найдено. Попробуйте изменить формулировку или ввести автора."
             )
             return
 
@@ -413,7 +351,7 @@ def execute_search_and_render(message: types.Message, query: str):
         bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
-            text="â ï¸ ÐÑÐ¾Ð¸Ð·Ð¾ÑÐ»Ð° Ð²ÑÐµÐ¼ÐµÐ½Ð½Ð°Ñ Ð¾ÑÐ¸Ð±ÐºÐ° ÑÐµÑÐ¸ Ð¿ÑÐ¸ Ð¾Ð±ÑÐ°ÑÐµÐ½Ð¸Ð¸ Ðº ÑÐµÑÐ²ÐµÑÐ°Ð¼ Ð¿Ð¾Ð¸ÑÐºÐ°. ÐÐ¾Ð²ÑÐ¾ÑÐ¸ÑÐµ Ð¿Ð¾Ð¿ÑÑÐºÑ ÑÐµÑÐµÐ· Ð¿Ð°ÑÑ ÑÐµÐºÑÐ½Ð´."
+            text="⚠️ Произошла временная ошибка сети при обращении к серверам поиска. Повторите попытку через пару секунд."
         )
 
 def render_track_page(chat_id: int, message_id: int):
@@ -434,21 +372,20 @@ def render_track_page(chat_id: int, message_id: int):
     for idx, track in enumerate(current_tracks):
         global_idx = start_idx + idx
         title_clean = track['title'].replace('[', '').replace(']', '')
-        button_text = f"ðµ {track['uploader']} â {title_clean}"
+        button_text = f"🎵 {track['uploader']} — {title_clean}"
         if len(button_text) > 55:
             button_text = button_text[:52] + '...'
         keyboard.add(types.InlineKeyboardButton(text=button_text, callback_data=f"play_{global_idx}"))
 
-    # Navigation row
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(types.InlineKeyboardButton("â¬ï¸ ÐÐ°Ð·Ð°Ð´", callback_data="page_prev"))
+        nav_buttons.append(types.InlineKeyboardButton("⬅️ Назад", callback_data="page_prev"))
     
     total_pages = max(1, (len(tracks) + per_page - 1) // per_page)
-    nav_buttons.append(types.InlineKeyboardButton(f"ð {page + 1}/{total_pages}", callback_data="page_num"))
+    nav_buttons.append(types.InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="page_num"))
 
     if end_idx < len(tracks):
-        nav_buttons.append(types.InlineKeyboardButton("ÐÐ¿ÐµÑÐµÐ´ â¡ï¸", callback_data="page_next"))
+        nav_buttons.append(types.InlineKeyboardButton("Вперед ➡️", callback_data="page_next"))
 
     if nav_buttons:
         keyboard.row(*nav_buttons)
@@ -457,7 +394,7 @@ def render_track_page(chat_id: int, message_id: int):
         bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
-            text="ð *ÐÑÐ±ÐµÑÐ¸ÑÐµ Ð½ÑÐ¶Ð½ÑÐ¹ ÑÑÐµÐº Ð¸Ð»Ð¸ ÑÐµÐ¼Ð¸ÐºÑ Ð¸Ð· ÑÐ¿Ð¸ÑÐºÐ°:*",
+            text="👇 *Выберите нужный трек или ремикс из списка:*",
             parse_mode="Markdown",
             reply_markup=keyboard
         )
@@ -488,12 +425,12 @@ def handle_callback_dispatcher(call: types.CallbackQuery):
             bot.answer_callback_query(call.id)
 
         elif call.data == "page_num":
-            bot.answer_callback_query(call.id, text="ÐÑÐ¿Ð¾Ð»ÑÐ·ÑÐ¹ÑÐµ ÐºÐ½Ð¾Ð¿ÐºÐ¸ ÑÐ¾ ÑÑÑÐµÐ»ÐºÐ°Ð¼Ð¸ Ð´Ð»Ñ Ð½Ð°Ð²Ð¸Ð³Ð°ÑÐ¸Ð¸ Ð¿Ð¾ ÑÑÑÐ°Ð½Ð¸ÑÐ°Ð¼.")
+            bot.answer_callback_query(call.id, text="Используйте кнопки со стрелками для навигации по страницам.")
 
         elif call.data.startswith("play_"):
             track_idx = int(call.data.split("_")[1])
             if not session or track_idx >= len(session['tracks']):
-                bot.answer_callback_query(call.id, text="â ï¸ Ð ÐµÐ·ÑÐ»ÑÑÐ°ÑÑ Ð¿Ð¾Ð¸ÑÐºÐ° ÑÑÑÐ°ÑÐµÐ»Ð¸. ÐÐ²ÐµÐ´Ð¸ÑÐµ Ð·Ð°Ð¿ÑÐ¾Ñ Ð·Ð°Ð½Ð¾Ð²Ð¾.")
+                bot.answer_callback_query(call.id, text="⚠️ Результаты поиска устарели. Введите запрос заново.")
                 return
 
             track = session['tracks'][track_idx]
@@ -502,20 +439,18 @@ def handle_callback_dispatcher(call: types.CallbackQuery):
             performer = track['uploader']
             duration = track.get('duration', 180)
 
-            bot.answer_callback_query(call.id, text="â¡ ÐÐµÐ½ÐµÑÐ°ÑÐ¸Ñ Ð¿Ð¾ÑÐ¾ÐºÐ° Ð¸ Ð¾ÑÐ¿ÑÐ°Ð²ÐºÐ°...")
+            bot.answer_callback_query(call.id, text="⚡ Генерация потока и отправка...")
             bot.send_chat_action(chat_id, 'upload_document')
 
-            # Fetch media stream URL with failover
             audio_url = fetch_audio_stream_url(video_id)
             if not audio_url:
-                bot.send_message(chat_id, "â ÐÐµ ÑÐ´Ð°Ð»Ð¾ÑÑ Ð¿Ð¾Ð»ÑÑÐ¸ÑÑ ÑÑÐ°Ð±Ð¸Ð»ÑÐ½ÑÐ¹ Ð°ÑÐ´Ð¸Ð¾Ð¿Ð¾ÑÐ¾Ðº Ð´Ð»Ñ ÑÑÐ¾Ð³Ð¾ ÑÑÐµÐºÐ°. ÐÐ¾Ð¿ÑÐ¾Ð±ÑÐ¹ÑÐµ Ð²ÑÐ±ÑÐ°ÑÑ Ð´ÑÑÐ³Ð¾Ð¹.")
+                bot.send_message(chat_id, "❌ Не удалось получить стабильный аудиопоток для этого трека. Попробуйте выбрать другой.")
                 return
 
             temp_filename = f"audio_{chat_id}_{int(time.time())}.mp3"
             download_success = False
 
             try:
-                # Stream file chunk by chunk to prevent memory bloat and server freezes
                 with requests.get(audio_url, stream=True, timeout=20) as r:
                     if r.status_code == 200:
                         with open(temp_filename, 'wb') as f:
@@ -539,7 +474,7 @@ def handle_callback_dispatcher(call: types.CallbackQuery):
 
             except Exception as e:
                 logger.error(f"Error downloading or sending track {video_id}: {e}")
-                bot.send_message(chat_id, "â ï¸ ÐÑÐ¸Ð±ÐºÐ° Ð¿ÑÐ¸ Ð¿ÐµÑÐµÐ´Ð°ÑÐµ Ð°ÑÐ´Ð¸Ð¾ÑÐ°Ð¹Ð»Ð°. ÐÐ¾Ð¿ÑÐ¾Ð±ÑÐ¹ÑÐµ Ð²ÑÐ±ÑÐ°ÑÑ Ð´ÑÑÐ³ÑÑ Ð²ÐµÑÑÐ¸Ñ ÑÑÐµÐºÐ°.")
+                bot.send_message(chat_id, "⚠️ Ошибка при передаче аудиофайла. Попробуйте выбрать другую версию трека.")
             finally:
                 if os.path.exists(temp_filename):
                     try:
@@ -550,7 +485,7 @@ def handle_callback_dispatcher(call: types.CallbackQuery):
     except Exception as e:
         logger.error(f"Critical error in callback handler: {e}")
         try:
-            bot.answer_callback_query(call.id, text="ÐÑÐ¾Ð¸Ð·Ð¾ÑÐ»Ð° Ð½ÐµÐ¿ÑÐµÐ´Ð²Ð¸Ð´ÐµÐ½Ð½Ð°Ñ Ð¾ÑÐ¸Ð±ÐºÐ°.")
+            bot.answer_callback_query(call.id, text="Произошла непредвиденная ошибка.")
         except Exception:
             pass
 
@@ -559,10 +494,9 @@ def handle_callback_dispatcher(call: types.CallbackQuery):
 # ---------------------------------------------------------------------------
 if __name__ == '__main__':
     logger.info("==================================================")
-    logger.info("STARTING ENTERPRISE TELEGRAM MUSIC BOT ENGINE v5.4")
+    logger.info("STARTING ENTERPRISE TELEGRAM MUSIC BOT ENGINE v5.5")
     logger.info("==================================================")
     
-    # Graceful polling loop with automatic recovery against network blackouts or dropped sockets
     while True:
         try:
             logger.info("Initiating Telegram Bot polling listener...")

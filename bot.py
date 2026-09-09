@@ -20,6 +20,29 @@ user_data = {}
 
 MAX_TELEGRAM_FILE_MB = 49  # лимит обычного Bot API на отправку файлов
 
+# Путь к файлу cookies (экспортированному из браузера с залогиненным YouTube).
+# Без него YouTube на IP хостингов почти всегда отвечает
+# "Sign in to confirm you're not a bot" — см. README/инструкцию в чате.
+COOKIES_FILE = os.environ.get('YOUTUBE_COOKIES_FILE', 'cookies.txt')
+if not os.path.exists(COOKIES_FILE):
+    COOKIES_FILE = None
+    print("⚠️ cookies.txt не найден — запросы к YouTube могут блокироваться (429 / bot-check).")
+
+
+def base_ydl_opts(extra: dict) -> dict:
+    """Общие настройки yt-dlp: cookies + лёгкий троттлинг против 429."""
+    opts = {
+        'quiet': True,
+        'geo_bypass': True,
+        'extractor_args': {'youtube': {'player_client': ['ios', 'mweb', 'android']}},
+        'sleep_interval_requests': 1,
+        'retries': 3,
+    }
+    if COOKIES_FILE:
+        opts['cookiefile'] = COOKIES_FILE
+    opts.update(extra)
+    return opts
+
 
 def esc(text: str) -> str:
     """Экранирование текста для HTML parse_mode — защищает от падения бота,
@@ -87,16 +110,13 @@ def search_music_query(message, query, is_top=False):
         return
 
     try:
-        ydl_opts = {
+        ydl_opts = base_ydl_opts({
             'extract_flat': 'in_playlist',
-            'default_search': 'ytsearch20',
-            'quiet': True,
-            'geo_bypass': True,
-            'extractor_args': {'youtube': {'player_client': ['ios', 'mweb', 'android']}},
-        }
+            'default_search': 'ytsearch12',
+        })
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_result = ydl.extract_info(f"ytsearch20:{query}", download=False) or {}
+            search_result = ydl.extract_info(f"ytsearch12:{query}", download=False) or {}
             entries = [e for e in search_result.get('entries', []) if e]
 
         if not entries:
@@ -217,16 +237,13 @@ def handle_play(call, chat_id, data):
     # и гарантированно чистит диск после отправки
     with tempfile.TemporaryDirectory() as tmpdir:
         outtmpl = os.path.join(tmpdir, "audio.%(ext)s")
-        ydl_opts = {
+        ydl_opts = base_ydl_opts({
             'format': 'bestaudio/best',
             'outtmpl': outtmpl,
             'ffmpeg_location': FFMPEG_PATH,
             'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}],
-            'quiet': True,
             'noplaylist': True,
-            'geo_bypass': True,
-            'extractor_args': {'youtube': {'player_client': ['ios', 'mweb', 'android']}},
-        }
+        })
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
